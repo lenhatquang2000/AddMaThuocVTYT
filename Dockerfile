@@ -29,7 +29,12 @@ RUN composer install --optimize-autoloader --no-dev
 RUN cp .env.example .env || true
 RUN php artisan key:generate --force || true
 
+# Force drivers to 'file' to avoid database dependency
+RUN sed -i 's/SESSION_DRIVER=database/SESSION_DRIVER=file/g' .env || echo "SESSION_DRIVER=file" >> .env
+RUN sed -i 's/CACHE_STORE=database/CACHE_STORE=file/g' .env || echo "CACHE_STORE=file" >> .env
+
 RUN chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache
+RUN chmod -R 775 /var/www/storage /var/www/bootstrap/cache
 
 EXPOSE 10000
 
