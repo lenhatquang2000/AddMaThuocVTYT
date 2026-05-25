@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use PhpOffice\PhpSpreadsheet\IOFactory;
-use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
 class ThuocController extends Controller
 {
@@ -13,208 +12,158 @@ class ThuocController extends Controller
         return view('add_ma_thuoc_dv');
     }
 
+    private function escapeSqlString($value)
+    {
+        if ($value === null) return "NULL";
+        $escaped = str_replace("'", "''", $value);
+        return "N'" . $escaped . "'";
+    }
+
     public function process(Request $request)
     {
-        // ... (giữ nguyên logic cũ cho Dịch Vụ)
-        $request->validate([
-            'excel_file' => 'required|mimes:xlsx,xls,csv'
-        ]);
-
+        $request->validate(['excel_file' => 'required|mimes:xlsx,xls,csv']);
         $file = $request->file('excel_file');
         $spreadsheet = IOFactory::load($file->getRealPath());
-        $worksheet = $spreadsheet->getActiveSheet();
-        $highestRow = $worksheet->getHighestRow();
-        
+        $sheet = $spreadsheet->getActiveSheet();
+        $rows = $sheet->toArray();
+
         $queries = [];
-        
-        for ($row = 3; $row <= $highestRow; $row++) {
-            $maNT = $worksheet->getCell('B' . $row)->getValue();
-            $maThuoc = $worksheet->getCell('E' . $row)->getValue();
-            $tenThuoc = $worksheet->getCell('F' . $row)->getValue();
-            $tenKhoaHoc = $worksheet->getCell('G' . $row)->getValue();
-            $hoatChat = $worksheet->getCell('H' . $row)->getValue();
-            $nhaSX = $worksheet->getCell('I' . $row)->getValue();
-            $duongDung = $worksheet->getCell('J' . $row)->getValue();
-            $dvt = $worksheet->getCell('K' . $row)->getValue();
-            $quiCach = $worksheet->getCell('M' . $row)->getValue();
-            $nhomThuoc = $worksheet->getCell('O' . $row)->getValue();
-            $dangDung = $worksheet->getCell('P' . $row)->getValue();
-            $donChat = strtolower(trim($worksheet->getCell('Q' . $row)->getValue())) === 'x' ? 'true' : 'false';
+        for ($i = 2; $i < count($rows); $i++) {
+            $row = $rows[$i];
+            if (empty($row[1])) continue;
 
-            if (empty($maThuoc)) continue;
+            $maThuoc = $row[1];
+            $tenThuoc = $this->escapeSqlString($row[4]);
+            $donViTinh = $this->escapeSqlString($row[5]);
+            $hamLuong = $this->escapeSqlString($row[6]);
+            $cachDung = $this->escapeSqlString($row[7]);
+            $hangSanXuat = $this->escapeSqlString($row[8]);
+            $nuocSanXuat = $this->escapeSqlString($row[9]);
+            $quyCach = $this->escapeSqlString($row[10]);
+            $hoatChat = $this->escapeSqlString($row[12]);
+            $giaMua = $row[14] ?? 0;
+            $giaBan = $row[15] ?? 0;
+            $coBH = ($row[16] === 'x' || $row[16] === 'X') ? 'true' : 'false';
 
-            $tenThuocEsc = str_replace("'", "''", $tenThuoc);
-            $tenKhoaHocEsc = str_replace("'", "''", $tenKhoaHoc);
-            $hoatChatEsc = str_replace("'", "''", $hoatChat);
-            $nhaSXEsc = str_replace("'", "''", $nhaSX);
-            $duongDungEsc = str_replace("'", "''", $duongDung);
-            $dvtEsc = str_replace("'", "''", $dvt);
-            $quiCachEsc = str_replace("'", "''", $quiCach);
-
-            $query = "INSERT INTO \"Thuoc\"(\"MaThuoc\",\"TenThuoc\",\"TenKhoaHoc\", \"HoatChat\",\"NhaSX\",\"DuongDung\",\"DVT\", \"QuiCach\",\"MaNT\",\"NhomThuoc\",\"DangDung\",\"ThuocDonChat\")\n";
-            $query .= " VALUES ('$maThuoc', N'$tenThuocEsc', N'$tenKhoaHocEsc', N'$hoatChatEsc', N'$nhaSXEsc', N'$duongDungEsc', N'$dvtEsc', N'$quiCachEsc', $maNT, $nhomThuoc, $dangDung, $donChat);";
-            
-            $queries[] = $query;
+            $queries[] = "INSERT INTO \"Thuoc\" (\"MaThuoc\", \"TenThuoc\", \"DonViTinh\", \"HamLuong\", \"CachDung\", \"HangSanXuat\", \"NuocSanXuat\", \"QuyCach\", \"HoatChat\", \"GiaMua\", \"GiaBan\", \"CoBH\", \"Xoa\", \"NhaThuocNgoai\") VALUES ('$maThuoc', $tenThuoc, $donViTinh, $hamLuong, $cachDung, $hangSanXuat, $nuocSanXuat, $quyCach, $hoatChat, $giaMua, $giaBan, $coBH, false, false);";
         }
 
         return response()->json([
             'success' => true,
+            'init_queries' => "CREATE TEMP TABLE tbTam (MaThuoc varchar(255));",
             'queries' => implode("\n", $queries),
-            'init_queries' => "Drop Table If Exists tbTam;\nCreate Temp Table tbTam as select \"IDThuoc\",\"MaKhoa\", cast(\"IDThuoc\" as text) || '_'|| cast(\"MaKhoa\" as text) as \"col\" from \"Thuoc\" as \"a\",\"Khoa\" as \"b\" ;\n\ninsert into \"SoLuongThuocTon\"(\"IDThuoc\",\"MaKhoa\",\"SoLuong\")\nselect \"a\".\"IDThuoc\",\"a\".\"MaKhoa\",0  from tbTam as \"a\" left outer join \"SoLuongThuocTon\" as \"b\" on \"a\".\"col\"=cast(\"b\".\"IDThuoc\" as text) || '_'|| cast(\"b\".\"MaKhoa\" as text)\nwhere \"b\".\"MaKhoa\" is null;",
-            'warning_queries' => "insert into \"Thuoc_CanhBaoTon\" ( \"IDThuoc\",  \"SoLuong\" ,  \"MaKho\")\nselect  \"IDThuoc\",0,2\nfrom \"Thuoc\"  where \"ThuocBH\"=false AND \"Xoa\"=false and \"IDThuoc\" NOT IN (select \"IDThuoc\"from \"Thuoc_CanhBaoTon\" where \"MaKho\"=2)"
+            'warning_queries' => "INSERT INTO \"Thuoc_CanhBaoTon\" (\"IDThuoc\", \"SoLuong\", \"MaKho\") SELECT \"IDThuoc\", 0, 2 FROM \"Thuoc\" WHERE \"CoBH\"=false AND \"Xoa\"=false AND \"IDThuoc\" NOT IN (SELECT \"IDThuoc\" FROM \"Thuoc_CanhBaoTon\" WHERE \"MaKho\"=2);"
         ]);
     }
 
     public function processKiGui(Request $request)
     {
-        // ... (existing processKiGui logic)
-        $request->validate([
-            'excel_file' => 'required|mimes:xlsx,xls,csv'
-        ]);
-
+        $request->validate(['excel_file' => 'required|mimes:xlsx,xls,csv']);
         $file = $request->file('excel_file');
         $spreadsheet = IOFactory::load($file->getRealPath());
-        $worksheet = $spreadsheet->getActiveSheet();
-        $highestRow = $worksheet->getHighestRow();
-        
+        $sheet = $spreadsheet->getActiveSheet();
+        $rows = $sheet->toArray();
+
         $queries = [];
         $maThuocList = [];
-        
-        for ($row = 3; $row <= $highestRow; $row++) {
-            $maNT = $worksheet->getCell('B' . $row)->getValue();
-            $maThuoc = $worksheet->getCell('E' . $row)->getValue();
-            $tenThuoc = $worksheet->getCell('F' . $row)->getValue();
-            $tenKhoaHoc = $worksheet->getCell('G' . $row)->getValue();
-            $hoatChat = $worksheet->getCell('H' . $row)->getValue();
-            $nhaSX = $worksheet->getCell('I' . $row)->getValue();
-            $duongDung = $worksheet->getCell('J' . $row)->getValue();
-            $dvt = $worksheet->getCell('K' . $row)->getValue();
-            $quiCach = $worksheet->getCell('M' . $row)->getValue();
-            $nhomThuoc = $worksheet->getCell('O' . $row)->getValue();
-            $dangDung = $worksheet->getCell('P' . $row)->getValue();
-            $donChat = strtolower(trim($worksheet->getCell('Q' . $row)->getValue())) === 'x' ? 'true' : 'false';
+        for ($i = 2; $i < count($rows); $i++) {
+            $row = $rows[$i];
+            if (empty($row[1])) continue;
 
-            if (empty($maThuoc)) continue;
-
+            $maThuoc = $row[1];
             $maThuocList[] = $maThuoc;
+            $tenThuoc = $this->escapeSqlString($row[4]);
+            $donViTinh = $this->escapeSqlString($row[5]);
+            $hamLuong = $this->escapeSqlString($row[6]);
+            $cachDung = $this->escapeSqlString($row[7]);
+            $hangSanXuat = $this->escapeSqlString($row[8]);
+            $nuocSanXuat = $this->escapeSqlString($row[9]);
+            $quyCach = $this->escapeSqlString($row[10]);
+            $hoatChat = $this->escapeSqlString($row[12]);
+            $giaMua = $row[14] ?? 0;
+            $giaBan = $row[15] ?? 0;
+            $coBH = ($row[16] === 'x' || $row[16] === 'X') ? 'true' : 'false';
 
-            $tenThuocEsc = str_replace("'", "''", $tenThuoc);
-            $tenKhoaHocEsc = str_replace("'", "''", $tenKhoaHoc);
-            $hoatChatEsc = str_replace("'", "''", $hoatChat);
-            $nhaSXEsc = str_replace("'", "''", $nhaSX);
-            $duongDungEsc = str_replace("'", "''", $duongDung);
-            $dvtEsc = str_replace("'", "''", $dvt);
-            $quiCachEsc = str_replace("'", "''", $quiCach);
-
-            // Cấu trúc INSERT tương tự nhưng có thể tùy chỉnh nếu cần trong tương lai
-            $query = "INSERT INTO \"Thuoc\"(\"MaThuoc\",\"TenThuoc\",\"TenKhoaHoc\", \"HoatChat\",\"NhaSX\",\"DuongDung\",\"DVT\", \"QuiCach\",\"MaNT\",\"NhomThuoc\",\"DangDung\",\"ThuocDonChat\")\n";
-            $query .= " VALUES ('$maThuoc', N'$tenThuocEsc', N'$tenKhoaHocEsc', N'$hoatChatEsc', N'$nhaSXEsc', N'$duongDungEsc', N'$dvtEsc', N'$quiCachEsc', $maNT, $nhomThuoc, $dangDung, $donChat);";
-            
-            $queries[] = $query;
+            $queries[] = "INSERT INTO \"Thuoc\" (\"MaThuoc\", \"TenThuoc\", \"DonViTinh\", \"HamLuong\", \"CachDung\", \"HangSanXuat\", \"NuocSanXuat\", \"QuyCach\", \"HoatChat\", \"GiaMua\", \"GiaBan\", \"CoBH\", \"Xoa\", \"NhaThuocNgoai\") VALUES ('$maThuoc', $tenThuoc, $donViTinh, $hamLuong, $cachDung, $hangSanXuat, $nuocSanXuat, $quyCach, $hoatChat, $giaMua, $giaBan, $coBH, false, false);";
         }
 
-        $maThuocList = array_map(function($m) { return "'$m'"; }, array_filter($maThuocList));
-        $maThuocIn = implode(',', $maThuocList);
+        $maThuocIn = "'" . implode("','", $maThuocList) . "'";
 
         return response()->json([
             'success' => true,
+            'init_queries' => "CREATE TEMP TABLE tbTam (MaThuoc varchar(255));",
             'queries' => implode("\n", $queries),
-            'init_queries' => "Drop Table If Exists tbTam;\nCreate Temp Table tbTam as select \"IDThuoc\",\"MaKhoa\", cast(\"IDThuoc\" as text) || '_'|| cast(\"MaKhoa\" as text) as \"col\" from \"Thuoc\" as \"a\",\"Khoa\" as \"b\" ;\n\ninsert into \"SoLuongThuocTon\"(\"IDThuoc\",\"MaKhoa\",\"SoLuong\")\nselect \"a\".\"IDThuoc\",\"a\".\"MaKhoa\",0  from tbTam as \"a\" left outer join \"SoLuongThuocTon\" as \"b\" on \"a\".\"col\"=cast(\"b\".\"IDThuoc\" as text) || '_'|| cast(\"b\".\"MaKhoa\" as text)\nwhere \"b\".\"MaKhoa\" is null;",
-            'warning_queries' => "insert into \"Thuoc_CanhBaoTon\" ( \"IDThuoc\",  \"SoLuong\" ,  \"MaKho\")\nselect  \"IDThuoc\",0,1\nfrom \"Thuoc\"  where \"ThuocBH\"=false AND \"Xoa\"=false and \"IDThuoc\" NOT IN (select \"IDThuoc\"from \"Thuoc_CanhBaoTon\" where \"MaKho\"=1)",
-            'update_kigui_queries' => "update \"Thuoc\" set \"NhaThuocNgoai\"=true,\"IDDVCTN\"=3\nWHERE \"MaThuoc\" in ($maThuocIn);",
-            'check_queries' => "select \"NhaThuocNgoai\",\"IDDVCTN\", * from \"Thuoc\"\nWHERE \"MaThuoc\" in ($maThuocIn);"
+            'warning_queries' => "INSERT INTO \"Thuoc_CanhBaoTon\" (\"IDThuoc\", \"SoLuong\", \"MaKho\") SELECT \"IDThuoc\", 0, 1 FROM \"Thuoc\" WHERE \"CoBH\"=false AND \"Xoa\"=false AND \"IDThuoc\" NOT IN (SELECT \"IDThuoc\" FROM \"Thuoc_CanhBaoTon\" WHERE \"MaKho\"=1);",
+            'update_kigui_queries' => "UPDATE \"Thuoc\" SET \"NhaThuocNgoai\"=true, \"IDDVCTN\"=3 WHERE \"MaThuoc\" IN ($maThuocIn);",
+            'check_queries' => "SELECT \"NhaThuocNgoai\", \"IDDVCTN\", * FROM \"Thuoc\" WHERE \"MaThuoc\" IN ($maThuocIn);"
         ]);
     }
 
     public function processVTYTDV(Request $request)
     {
-        $request->validate([
-            'excel_file' => 'required|mimes:xlsx,xls,csv'
-        ]);
-
+        $request->validate(['excel_file' => 'required|mimes:xlsx,xls,csv']);
         $file = $request->file('excel_file');
         $spreadsheet = IOFactory::load($file->getRealPath());
-        $worksheet = $spreadsheet->getActiveSheet();
-        $highestRow = $worksheet->getHighestRow();
-        
+        $sheet = $spreadsheet->getActiveSheet();
+        $rows = $sheet->toArray();
+
         $queries = [];
-        
-        for ($row = 3; $row <= $highestRow; $row++) {
-            $maNhomVTYT = $worksheet->getCell('B' . $row)->getValue();
-            $maVTYT = $worksheet->getCell('E' . $row)->getValue();
-            $tenVTYT = $worksheet->getCell('F' . $row)->getValue();
-            $nhaSX = $worksheet->getCell('G' . $row)->getValue();
-            $dvt = $worksheet->getCell('H' . $row)->getValue();
-            $quiCach = $worksheet->getCell('J' . $row)->getValue();
+        for ($i = 2; $i < count($rows); $i++) {
+            $row = $rows[$i];
+            if (empty($row[1])) continue;
 
-            if (empty($maVTYT)) continue;
+            $maVTYT = $row[1];
+            $tenVTYT = $this->escapeSqlString($row[4]);
+            $donViTinh = $this->escapeSqlString($row[5]);
+            $quyCach = $this->escapeSqlString($row[6]);
+            $hangSanXuat = $this->escapeSqlString($row[7]);
+            $nuocSanXuat = $this->escapeSqlString($row[9]);
 
-            $tenVTYTEsc = str_replace("'", "''", $tenVTYT);
-            $nhaSXEsc = str_replace("'", "''", $nhaSX);
-            $dvtEsc = str_replace("'", "''", $dvt);
-            $quiCachEsc = str_replace("'", "''", $quiCach);
-
-            $query = "INSERT INTO \"VatTuYTe\"(\"MaVTYT\",\"TenVTYT\",\"NhaSX\",\"DVT\",\"QuiCach\",\"SoLuongCon\",\"CoBH\",\"MaNhomVTYT\")\n";
-            $query .= "VALUES('$maVTYT',N'$tenVTYTEsc',N'$nhaSXEsc',N'$dvtEsc',N'$quiCachEsc',0,false,$maNhomVTYT);";
-            
-            $queries[] = $query;
+            $queries[] = "INSERT INTO \"VatTuYTe\" (\"MaVTYT\", \"TenVTYT\", \"DonViTinh\", \"QuyCach\", \"HangSanXuat\", \"NuocSanXuat\", \"Xoa\", \"NhaThuocNgoai\", \"CoBH\") VALUES ('$maVTYT', $tenVTYT, $donViTinh, $quyCach, $hangSanXuat, $nuocSanXuat, false, false, false);";
         }
 
         return response()->json([
             'success' => true,
+            'init_queries' => "DROP TABLE IF EXISTS tbTam;",
             'queries' => implode("\n", $queries),
-            'init_queries' => "Drop Table If Exists tbTam;\nCreate Temp Table tbTam as select \"IDVTYT\",\"MaKhoa\", cast(\"IDVTYT\" as text) || '_'|| cast(\"MaKhoa\" as text) as \"col\" from \"VatTuYTe\" as \"a\",\"Khoa\" as \"b\" ;\n\ninsert into \"SoLuongVTYTTon\"(\"IDVTYT\",\"MaKhoa\",\"SoLuong\")\nselect \"a\".\"IDVTYT\",\"a\".\"MaKhoa\",0  from tbTam as \"a\" left outer join \"SoLuongVTYTTon\" as \"b\" on \"a\".\"col\"=cast(\"b\".\"IDVTYT\" as text) || '_'|| cast(\"b\".\"MaKhoa\" as text)\nwhere \"b\".\"MaKhoa\" is null;",
-            'warning_queries' => "insert into \"VTYT_CanhBaoTon\" ( \"IDVTYT\",  \"SoLuong\" ,  \"MaKho\")\nselect   \"IDVTYT\",0,2\nfrom \"VatTuYTe\"  where \"CoBH\"=false AND \"Xoa\"=false  and \"IDVTYT\" NOT IN (select \"IDVTYT\"from \"VTYT_CanhBaoTon\" where \"MaKho\"=2)"
+            'warning_queries' => "INSERT INTO \"VTYT_CanhBaoTon\" (\"IDVTYT\", \"SoLuong\", \"MaKho\") SELECT \"IDVTYT\", 0, 2 FROM \"VatTuYTe\" WHERE \"CoBH\"=false AND \"Xoa\"=false AND \"IDVTYT\" NOT IN (SELECT \"IDVTYT\" FROM \"VTYT_CanhBaoTon\" WHERE \"MaKho\"=2);"
         ]);
     }
 
     public function processVTYTKiGui(Request $request)
     {
-        $request->validate([
-            'excel_file' => 'required|mimes:xlsx,xls,csv'
-        ]);
-
+        $request->validate(['excel_file' => 'required|mimes:xlsx,xls,csv']);
         $file = $request->file('excel_file');
         $spreadsheet = IOFactory::load($file->getRealPath());
-        $worksheet = $spreadsheet->getActiveSheet();
-        $highestRow = $worksheet->getHighestRow();
-        
+        $sheet = $spreadsheet->getActiveSheet();
+        $rows = $sheet->toArray();
+
         $queries = [];
         $maVTYTList = [];
-        
-        for ($row = 3; $row <= $highestRow; $row++) {
-            $maNhomVTYT = $worksheet->getCell('B' . $row)->getValue();
-            $maVTYT = $worksheet->getCell('E' . $row)->getValue();
-            $tenVTYT = $worksheet->getCell('G' . $row)->getValue();
-            $nhaSX = $worksheet->getCell('H' . $row)->getValue();
-            $dvt = $worksheet->getCell('I' . $row)->getValue();
-            $quiCach = $worksheet->getCell('K' . $row)->getValue();
+        for ($i = 2; $i < count($rows); $i++) {
+            $row = $rows[$i];
+            if (empty($row[1])) continue;
 
-            if (empty($maVTYT)) continue;
-
+            $maVTYT = $row[1];
             $maVTYTList[] = $maVTYT;
+            $tenVTYT = $this->escapeSqlString($row[4]);
+            $donViTinh = $this->escapeSqlString($row[5]);
+            $quyCach = $this->escapeSqlString($row[6]);
+            $hangSanXuat = $this->escapeSqlString($row[7]);
+            $nuocSanXuat = $this->escapeSqlString($row[9]);
 
-            $tenVTYTEsc = str_replace("'", "''", $tenVTYT);
-            $nhaSXEsc = str_replace("'", "''", $nhaSX);
-            $dvtEsc = str_replace("'", "''", $dvt);
-            $quiCachEsc = str_replace("'", "''", $quiCach);
-
-            $query = "INSERT INTO \"VatTuYTe\"(\"MaVTYT\",\"TenVTYT\",\"NhaSX\",\"DVT\",\"QuiCach\",\"SoLuongCon\",\"CoBH\",\"MaNhomVTYT\")\n";
-            $query .= "VALUES('$maVTYT',N'$tenVTYTEsc',N'$nhaSXEsc',N'$dvtEsc',N'$quiCachEsc',0,false,$maNhomVTYT);";
-            
-            $queries[] = $query;
+            $queries[] = "INSERT INTO \"VatTuYTe\" (\"MaVTYT\", \"TenVTYT\", \"DonViTinh\", \"QuyCach\", \"HangSanXuat\", \"NuocSanXuat\", \"Xoa\", \"NhaThuocNgoai\", \"CoBH\") VALUES ('$maVTYT', $tenVTYT, $donViTinh, $quyCach, $hangSanXuat, $nuocSanXuat, false, false, false);";
         }
 
-        $maVTYTList = array_map(function($m) { return "'$m'"; }, array_filter($maVTYTList));
-        $maVTYTIn = implode(',', $maVTYTList);
+        $maVTYTIn = "'" . implode("','", $maVTYTList) . "'";
 
         return response()->json([
             'success' => true,
+            'init_queries' => "DROP TABLE IF EXISTS tbTam;",
             'queries' => implode("\n", $queries),
-            'init_queries' => "Drop Table If Exists tbTam;\nCreate Temp Table tbTam as select \"IDVTYT\",\"MaKhoa\", cast(\"IDVTYT\" as text) || '_'|| cast(\"MaKhoa\" as text) as \"col\" from \"VatTuYTe\" as \"a\",\"Khoa\" as \"b\" ;\n\ninsert into \"SoLuongVTYTTon\"(\"IDVTYT\",\"MaKhoa\",\"SoLuong\")\nselect \"a\".\"IDVTYT\",\"a\".\"MaKhoa\",0  from tbTam as \"a\" left outer join \"SoLuongVTYTTon\" as \"b\" on \"a\".\"col\"=cast(\"b\".\"IDVTYT\" as text) || '_'|| cast(\"b\".\"MaKhoa\" as text)\nwhere \"b\".\"MaKhoa\" is null;",
-            'warning_queries' => "insert into \"VTYT_CanhBaoTon\" ( \"IDVTYT\",  \"SoLuong\" ,  \"MaKho\")\nselect   \"IDVTYT\",0,1\nfrom \"VatTuYTe\"  where \"CoBH\"=false AND \"Xoa\"=false  and \"IDVTYT\" NOT IN (select \"IDVTYT\"from \"VTYT_CanhBaoTon\" where \"MaKho\"=1)",
-            'update_kigui_queries' => "update \"VatTuYTe\" set \"NhaThuocNgoai\"=true,\"IDDVCTN\"=3\nwhere \"MaVTYT\" in ($maVTYTIn);",
-            'check_queries' => "select  * from \"VatTuYTe\"  where \"MaVTYT\" in ($maVTYTIn);"
+            'warning_queries' => "INSERT INTO \"VTYT_CanhBaoTon\" (\"IDVTYT\", \"SoLuong\", \"MaKho\") SELECT \"IDVTYT\", 0, 1 FROM \"VatTuYTe\" WHERE \"CoBH\"=false AND \"Xoa\"=false AND \"IDVTYT\" NOT IN (SELECT \"IDVTYT\" FROM \"VTYT_CanhBaoTon\" WHERE \"MaKho\"=1);",
+            'update_kigui_queries' => "UPDATE \"VatTuYTe\" SET \"NhaThuocNgoai\"=true, \"IDDVCTN\"=3 WHERE \"MaVTYT\" IN ($maVTYTIn);",
+            'check_queries' => "SELECT * FROM \"VatTuYTe\" WHERE \"MaVTYT\" IN ($maVTYTIn);"
         ]);
     }
 }
